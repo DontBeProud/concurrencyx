@@ -42,6 +42,36 @@ func CreateConcurrencyX(ctx context.Context, srvUniqueName string, rDb *redis.Cl
 }
 
 func (x ConcurrencyX) Join(ctx context.Context, waitTimeOut time.Duration) error {
+	resChan := make(chan error)
+	continueChan := make(chan bool)
+	timeOutClock := time.Tick(waitTimeOut)
+
+	go func() {
+		for{
+			resChan <- x._join(ctx, waitTimeOut)
+			if _, ok := <- continueChan; !ok{
+				break
+			}
+		}
+	}()
+
+	for{
+		select {
+		case <- timeOutClock:
+			close(continueChan)
+			return ErrorWaitTimeOut
+		case err := <- resChan:
+			// retry
+			if err == nil || err.Error() != ErrorReachConcurrencyThreshold.Error(){
+				close(continueChan)
+				return err
+			}
+			continueChan <- true
+		}
+	}
+}
+
+func (x ConcurrencyX) _join(ctx context.Context, waitTimeOut time.Duration) error {
 	// get distributed lock
 	lck, err := x.lockCreator.Acquire(ctx, 10*time.Second, waitTimeOut)
 	if err != nil {
